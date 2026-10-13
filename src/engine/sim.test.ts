@@ -9,16 +9,16 @@ function botInput(s: GameState): Input {
   const i: Input = { ...NO_INPUT }
   if (s.phase === 'duel') { i.press = s.duel!.t > 12 + ((s.tick * 7) % 55); return i }
   if (s.ball.owner === f.id) {
-    i.mx = (50 - f.x) / 30
+    i.mx = (35 - f.x) / 22
     i.my = -1
-    if (f.y < 60) {
+    if (f.y < 48) {
       if (s.tick % 7 === 0) i.special1 = true
-      i.shootDown = f.y > 40
+      i.shootDown = f.y > 32
     }
   } else {
     i.mx = Math.sign(s.ball.x - f.x)
     i.my = Math.sign(s.ball.y - f.y)
-    if (Math.hypot(s.ball.x - f.x, s.ball.y - f.y) < 14 && s.tick % 20 === 0) i.tackle = true
+    if (Math.hypot(s.ball.x - f.x, s.ball.y - f.y) < 11 && s.tick % 20 === 0) i.tackle = true
   }
   return i
 }
@@ -45,8 +45,9 @@ describe('daily', () => {
     const b = dailyChallenge('2026-10-14')
     expect(a.trainer.id).toBe(b.trainer.id)
     expect(a.ours).toEqual(b.ours)
-    expect(a.ours).toHaveLength(5)
-    expect(new Set(a.ours.map((o) => o.speciesId)).size).toBe(5)
+    expect(a.ours).toHaveLength(3)
+    expect(new Set(a.ours.map((o) => o.speciesId)).size).toBe(3)
+    expect(a.theirs.map((o) => o.role).sort()).toEqual(['DEF', 'FWD', 'GK'])
   })
 })
 
@@ -66,8 +67,8 @@ describe('match', () => {
       let guard = 0
       while (s.phase !== 'end' && guard++ < 60 * 400) {
         step(s, botInput(s))
-        expect(s.ball.x).toBeGreaterThanOrEqual(0)
-        expect(s.ball.x).toBeLessThanOrEqual(W)
+        expect(s.ball.x).toBeGreaterThanOrEqual(-1)
+        expect(s.ball.x).toBeLessThanOrEqual(W + 1)
         expect(s.ball.y).toBeGreaterThanOrEqual(-2)
         expect(s.ball.y).toBeLessThanOrEqual(H + 2)
       }

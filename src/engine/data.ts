@@ -1,6 +1,6 @@
 import type { PType } from './types'
 
-export type Role = 'GK' | 'DEF' | 'MID' | 'FWD'
+export type Role = 'GK' | 'DEF' | 'FWD'
 export type MoveFamily = 'TIR' | 'DRIBBLE' | 'TACLE' | 'ARRET'
 
 export interface Species {

@@ -1,6 +1,6 @@
 # Pokémon Strikers
 
-Arcade 5v5 football avec des sprites Pokémon statiques (gen 5), vue de dessus, et des hissatsu façon Inazuma Eleven.
+Arcade 3v3 football (terrain vertical, caméra qui suit le ballon, disques colorés par équipe) avec des sprites Pokémon statiques (gen 5), vue de dessus, et des hissatsu façon Inazuma Eleven.
 Un **défi du jour** par jour : même équipe imposée et même dresseur canon pour tout le monde (reset à 12:00 heure de Paris, comme Pokédle).
 
 ## Lancer
@@ -23,7 +23,9 @@ npm run build
 | Hissatsu 1 (tir) / 2 (dribble ou tacle) | U / I | boutons orange |
 | Timing du duel | Espace | TIRE ! |
 
-## Règles du MVP
+## Règles
+
+- 3 contre 3 : gardien, défenseur, attaquant. Le 4e Pokémon du jour est remplaçant (non jouable pour l'instant).
 
 - Match de 90 s, puis mort subite de 30 s si égalité. Égalité = pas de victoire (un cœur perdu).
 - 3 cœurs par jour : victoire = défi terminé et série +1 ; sinon -1 cœur ; plus de cœur = série à 0.
@@ -42,7 +44,7 @@ npm run build
 
 ## Hors MVP (idées v2)
 
-Remplaçant en jeu, jauge de super-tir du capitaine, items, combos de hissatsu, ARRÊT activable, classement en ligne (Supabase), portraits de dresseurs embarqués.
+Remplaçant jouable, jauge de super-tir du capitaine, items, combos de hissatsu, ARRÊT activable, classement en ligne (Supabase), portraits de dresseurs embarqués.
 
 ## Déploiement
 
