@@ -1,0 +1,10 @@
+{
+  "name": "Pokémon Strikers",
+  "short_name": "Strikers",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#EAF1FF",
+  "theme_color": "#EAF1FF",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
