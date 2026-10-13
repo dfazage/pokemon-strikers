@@ -25,26 +25,20 @@ export function dayNumber(key: string): number {
   return Math.round((Date.UTC(y, m - 1, d) - base) / 86400000) + 1
 }
 
-/** Attribue les rôles : GK = meilleure défense, FWD = meilleure puissance, puis DEF, MID, MID. Capitaine = meilleur total. */
-export function assignRoles(ids: number[]): { starters: FighterSetup[]; reserve: number } {
+/** 3 titulaires (les plus forts) + 1 remplaçant. GK = meilleure défense, FWD = meilleure puissance, DEF = le dernier. Capitaine = meilleur total. */
+export function assignRoles(ids: number[]): { starters: FighterSetup[]; reserve: number | null } {
   const pool = ids.map((id) => SPECIES_BY_ID.get(id)!)
   const total = (s: (typeof pool)[number]) => s.spd + s.pow + s.def
-  // le 6e (le plus faible) devient remplaçant
-  const sorted = pool.slice().sort((a, b) => total(b) - total(a))
-  const reserve = sorted[sorted.length - 1]
-  const five = sorted.slice(0, 5)
-  const captain = five[0]
-  const gk = five.slice().sort((a, b) => b.def - a.def)[0]
-  let rest = five.filter((s) => s !== gk)
-  const fwd = rest.slice().sort((a, b) => b.pow - a.pow)[0]
-  rest = rest.filter((s) => s !== fwd)
-  const def = rest.slice().sort((a, b) => b.def - a.def)[0]
-  const mids = rest.filter((s) => s !== def)
+  const sorted = pool.slice().sort((a, b) => total(b) - total(a) || a.id - b.id)
+  const three = sorted.slice(0, 3)
+  const reserve = sorted[3] ?? null
+  const captain = three[0]
+  const gk = three.slice().sort((a, b) => b.def - a.def || a.id - b.id)[0]
+  const rest = three.filter((s) => s !== gk)
+  const fwd = rest.slice().sort((a, b) => b.pow - a.pow || a.id - b.id)[0]
+  const def = rest.find((s) => s !== fwd)!
   const mk = (sp: (typeof pool)[number], role: FighterSetup['role']): FighterSetup => ({ speciesId: sp.id, role, captain: sp === captain })
-  return {
-    starters: [mk(gk, 'GK'), mk(def, 'DEF'), mk(mids[0], 'MID'), mk(mids[1], 'MID'), mk(fwd, 'FWD')],
-    reserve: reserve.id,
-  }
+  return { starters: [mk(gk, 'GK'), mk(def, 'DEF'), mk(fwd, 'FWD')], reserve: reserve ? reserve.id : null }
 }
 
 export interface DailyChallenge {
@@ -52,7 +46,7 @@ export interface DailyChallenge {
   number: number
   trainer: TrainerDef
   ours: FighterSetup[]
-  oursReserve: number
+  oursReserve: number | null
   theirs: FighterSetup[]
   options: MatchOptions
 }
@@ -61,10 +55,10 @@ export function dailyChallenge(key: string): DailyChallenge {
   const h = hashString('strikers:' + key)
   const rng = new Rng(h)
   const trainer = TRAINERS[h % TRAINERS.length]
-  // équipe imposée : 6 espèces tirées au sort, hors équipe du dresseur pour limiter les miroirs
+  // équipe imposée : 4 espèces tirées au sort, hors équipe du dresseur pour limiter les miroirs
   const banned = new Set(trainer.team)
   const pool = SPECIES.filter((s) => !banned.has(s.id)).map((s) => s.id)
-  const ids = rng.shuffle(pool).slice(0, 6)
+  const ids = rng.shuffle(pool).slice(0, 4)
   const mine = assignRoles(ids)
   const theirs = assignRoles(trainer.team)
   return {

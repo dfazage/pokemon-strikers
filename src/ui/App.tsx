@@ -106,7 +106,7 @@ function Home({ c, save, rec, streak, onPlay, onResult }: { c: DailyChallenge; s
           </div>
         </div>
         <div className="sprites-row">
-          {t.team.map((id, i) => <img key={i} src={sprite(id, 'front').src} alt={SPECIES_BY_ID.get(id)?.name} />)}
+          {c.theirs.map((f) => <img key={f.speciesId} src={sprite(f.speciesId, 'front').src} alt={SPECIES_BY_ID.get(f.speciesId)?.name} />)}
         </div>
         {rec.done ? (
           <button className="cta" onClick={onResult}>{rec.won ? 'Voir ma victoire' : 'Défi terminé — voir le bilan'}</button>
@@ -125,7 +125,7 @@ function Home({ c, save, rec, streak, onPlay, onResult }: { c: DailyChallenge; s
       <section>
         <div className="eyebrow pad">TON ÉQUIPE IMPOSÉE</div>
         <div className="carousel">
-          {[...c.ours.map((f) => f.speciesId), c.oursReserve].map((id) => (
+          {[...c.ours.map((f) => f.speciesId), ...(c.oursReserve ? [c.oursReserve] : [])].map((id) => (
             <div key={id} className="mini glass"><img src={sprite(id, 'front').src} alt="" /><span>{SPECIES_BY_ID.get(id)?.name}</span></div>
           ))}
         </div>
@@ -135,7 +135,7 @@ function Home({ c, save, rec, streak, onPlay, onResult }: { c: DailyChallenge; s
 }
 
 function Prep({ c, hearts, onBack, onStart }: { c: DailyChallenge; hearts: number; onBack: () => void; onStart: () => void }) {
-  const roleLabel = { GK: 'Gardien', DEF: 'Défenseur', MID: 'Milieu', FWD: 'Attaquant' } as const
+  const roleLabel = { GK: 'Gardien', DEF: 'Défenseur', FWD: 'Attaquant' } as const
   return (
     <main className="screen prep">
       <header className="top glass">
@@ -143,7 +143,21 @@ function Prep({ c, hearts, onBack, onStart }: { c: DailyChallenge; hearts: numbe
         <div className="brand">ÉQUIPE DU JOUR</div>
         <div className="hearts">{'❤️'.repeat(hearts)}{'🖤'.repeat(HEARTS - hearts)}</div>
       </header>
-      <p className="muted pad">Même équipe pour tout le monde. Les hissatsu coûtent des PP : gère ta jauge.</p>
+      <p className="muted pad">Même équipe pour tout le monde. <b>3 titulaires + 1 remplaçant</b>, les PP sont partagés.</p>
+      <div className="formation" aria-label="Composition sur le terrain">
+        <div className="f-center" />
+        <div className="f-box" />
+        {c.ours.slice().reverse().map((f, i) => (
+          <div key={f.speciesId} className="f-slot" style={{ left: ['50%', '24%', '50%'][i], top: ['16%', '52%', '78%'][i] }}>
+            <img src={sprite(f.speciesId, 'back').src} alt="" />
+            <i className="disc" />
+            <span className="f-role">{{ FWD: 'ATT', DEF: 'DÉF', GK: 'GB' }[f.role]}</span>
+          </div>
+        ))}
+        {c.oursReserve && (
+          <div className="f-bench"><span>BANC</span><img src={sprite(c.oursReserve, 'back').src} alt="" /></div>
+        )}
+      </div>
       <div className="cards">
         {c.ours.map((f) => {
           const sp = SPECIES_BY_ID.get(f.speciesId)!
@@ -163,10 +177,12 @@ function Prep({ c, hearts, onBack, onStart }: { c: DailyChallenge; hearts: numbe
             </article>
           )
         })}
-        <article className="pcard glass reserve">
-          <img src={sprite(c.oursReserve, 'back').src} alt="" />
-          <div className="pbody"><h3>{SPECIES_BY_ID.get(c.oursReserve)?.name}</h3><div className="muted">Remplaçant · entre en jeu dans une prochaine version</div></div>
-        </article>
+        {c.oursReserve && (
+          <article className="pcard glass reserve">
+            <img src={sprite(c.oursReserve, 'back').src} alt="" />
+            <div className="pbody"><h3>{SPECIES_BY_ID.get(c.oursReserve)?.name}</h3><div className="muted">Remplaçant · entre en jeu dans une prochaine version</div></div>
+          </article>
+        )}
       </div>
       <button className="cta sticky" onClick={onStart}>Coup d’envoi</button>
     </main>

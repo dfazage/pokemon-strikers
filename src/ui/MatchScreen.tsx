@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { DT, PERFECT_ZONE, PP_MAX, createMatch, step, type DuelResult, type GameState, type Phase } from '../engine/sim'
+import { DT, HISS_RANGE, PERFECT_ZONE, PP_MAX, aimXFor, createMatch, step, CX, type DuelResult, type GameState, type Phase } from '../engine/sim'
 import type { DailyChallenge } from '../engine/daily'
 import { TYPE_COLOR, TYPE_LABEL } from '../engine/types'
 import { Controls } from './controls'
-import { VIEW_H, draw, preload, sprite } from '../render'
+import { CANVAS_ASPECT, cameraTarget, draw, preload, sprite } from '../render'
 
 interface Hud {
   phase: Phase
@@ -21,13 +21,14 @@ interface Hud {
   costs: [number, number]
   sec: [boolean, boolean]
   charge: number
+  tackleNear: boolean
 }
 
 function snapshot(s: GameState): Hud {
   const f = s.fighters[s.controlled]
   const d = s.duel
   const owns = s.ball.owner === f.id
-  const dist = Math.hypot(50 - f.x, 0 - f.y)
+  const dist = Math.hypot(CX - f.x, 0 - f.y)
   const m1 = f.moves[1]
   const secOk = m1.family === 'DRIBBLE' ? owns : m1.family === 'TACLE' ? !owns : false
   return {
@@ -42,12 +43,13 @@ function snapshot(s: GameState): Hud {
       : null,
     result: s.phase === 'duelResult' ? s.lastDuel : null,
     carrier: owns,
-    inRange: owns && dist <= 72,
+    inRange: owns && dist <= HISS_RANGE,
     moves: [f.moves[0].name, m1.name],
     families: [f.moves[0].family, m1.family],
     costs: [f.moves[0].cost, m1.cost],
     sec: [true, secOk],
     charge: f.charge,
+    tackleNear: !owns && s.ball.owner !== null && s.fighters[s.ball.owner].team === 1 && Math.hypot(s.fighters[s.ball.owner].x - f.x, s.fighters[s.ball.owner].y - f.y) < 12,
   }
 }
 
@@ -84,7 +86,7 @@ export function MatchScreen({ challenge, hearts, onEnd, onQuit }: Props) {
       const w = wrap.current!.clientWidth
       const dpr = Math.min(2, window.devicePixelRatio || 1)
       cv.width = Math.round(w * dpr)
-      cv.height = Math.round(w * (VIEW_H / 100) * dpr)
+      cv.height = Math.round(w * CANVAS_ASPECT * dpr)
     }
     resize()
     const ro = new ResizeObserver(resize)
@@ -94,7 +96,8 @@ export function MatchScreen({ challenge, hearts, onEnd, onQuit }: Props) {
     let last = performance.now()
     let acc = 0
     let frame = 0
-    let aimX = 50
+    let aimX = CX
+    let camY = cameraTarget(s)
     let ended = false
     const loop = (now: number) => {
       acc += Math.min(0.1, (now - last) / 1000)
@@ -102,11 +105,12 @@ export function MatchScreen({ challenge, hearts, onEnd, onQuit }: Props) {
       let guard = 0
       while (acc >= DT && guard++ < 6) {
         const inp = controls.read()
-        aimX = 50 + Math.max(-1, Math.min(1, inp.mx)) * 12
+        aimX = aimXFor(inp.mx)
         step(s, inp)
         acc -= DT
       }
-      draw(ctx, cv.width, s, aimX, now / 1000)
+      camY += (cameraTarget(s) - camY) * 0.12
+      draw(ctx, cv.width, s, aimX, now / 1000, camY)
       frame++
       if (frame % 3 === 0 || s.phase === 'duel') setHud(snapshot(s))
       if (s.phase === 'end' && !ended) {
@@ -133,11 +137,11 @@ export function MatchScreen({ challenge, hearts, onEnd, onQuit }: Props) {
       <div className="match-top glass">
         <button className="icon-btn" onClick={onQuit} aria-label="Quitter">✕</button>
         <div className="score">
-          <span className="team-tag you">TOI</span>
-          <span className="pixel">{hud?.score[0] ?? 0}</span>
+          <span className="team-tag you"><i className="dot blue" />TOI</span>
+          <span className="pixel c-blue">{hud?.score[0] ?? 0}</span>
           <span className="clock">{hud?.overtime ? 'MORT SUBITE ' : ''}{mm}:{ss}</span>
-          <span className="pixel">{hud?.score[1] ?? 0}</span>
-          <span className="team-tag foe">{t.name.toUpperCase()}</span>
+          <span className="pixel c-violet">{hud?.score[1] ?? 0}</span>
+          <span className="team-tag foe">{t.name.toUpperCase()}<i className="dot violet" /></span>
         </div>
         <div className="hearts">{'❤️'.repeat(hearts)}{'🖤'.repeat(3 - hearts)}</div>
       </div>
@@ -150,14 +154,14 @@ export function MatchScreen({ challenge, hearts, onEnd, onQuit }: Props) {
         {hud?.duel && <DuelOverlay hud={hud} onPress={() => controls.tap('press')} />}
         {hud?.result && <ResultOverlay r={hud.result} />}
         {hud?.phase === 'end' && <div className="banner glass pixel-b">{hud.score[0] > hud.score[1] ? 'VICTOIRE !' : hud.score[0] < hud.score[1] ? 'DÉFAITE' : 'MATCH NUL'}</div>}
-      </div>
-
-      <div className="hud-bottom">
         <div className="pp glass">
-          <span className="pp-label">⚡ PP</span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="#E8730C" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z" /></svg>
           <div className="pp-bar"><div className="pp-fill" style={{ width: `${((hud?.pp ?? 50) / PP_MAX) * 100}%` }} /></div>
           <span className="pp-num">{Math.floor(hud?.pp ?? 50)}</span>
         </div>
+      </div>
+
+      <div className="hud-bottom">
         <TouchPad controls={controls} hud={hud} />
         <p className="keys-hint">Flèches/ZQSD · Espace/J tir (maintenir) · K passe · L tacle · U/I hissatsu</p>
       </div>
@@ -231,35 +235,39 @@ function TouchPad({ controls, hud }: { controls: Controls; hud: Hud | null }) {
   const can2 = !!hud && hud.sec[1] && pp >= hud.costs[1]
 
   return (
-    <div className="touchpad">
+    <div className="dock glass">
       <div
-        className="joystick glass"
+        className="joystick"
         ref={base}
         onPointerDown={(e) => { active.current = e.pointerId; e.currentTarget.setPointerCapture(e.pointerId); move(e) }}
         onPointerMove={(e) => { if (active.current === e.pointerId) move(e) }}
         onPointerUp={release}
         onPointerCancel={release}
+        aria-label="Joystick de déplacement"
       >
-        <div className="knob" style={{ transform: `translate(${knob.x * 30}px, ${knob.y * 30}px)` }} />
+        <div className="knob" style={{ transform: `translate(${knob.x * 32}px, ${knob.y * 32}px)` }} />
       </div>
-      <div className="buttons">
-        <button className={`act hiss ${can1 ? 'ready' : ''}`} disabled={!can1} onPointerDown={() => controls.tap('special1')}>
-          <b>{hud?.moves[0] ?? '—'}</b><small>{hud?.costs[0]} PP · TIR</small>
-        </button>
-        <button className={`act hiss ${can2 ? 'ready' : ''}`} disabled={!can2} onPointerDown={() => controls.tap('special2')}>
-          <b>{hud?.moves[1] ?? '—'}</b><small>{hud?.costs[1]} PP · {hud?.families[1]}</small>
-        </button>
-        <button className="act tackle" onPointerDown={() => controls.tap('tackle')}>TACLE</button>
-        <button className="act pass" onPointerDown={() => controls.tap('pass')}>PASSE</button>
-        <button
-          className="act shoot"
-          onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); controls.shootHeld = true }}
-          onPointerUp={() => { controls.shootHeld = false }}
-          onPointerCancel={() => { controls.shootHeld = false }}
-          style={{ ['--charge' as string]: `${(hud?.charge ?? 0) * 100}%` }}
-        >TIR</button>
+      <div className="cluster">
+        <div className="hiss-row">
+          <button className={`hiss ${can1 ? 'ready' : ''}`} disabled={!can1} onPointerDown={() => controls.tap('special1')}>
+            <b>{hud?.moves[0] ?? '—'}</b><small>TIR · {hud?.costs[0]} PP</small>
+          </button>
+          <button className={`hiss ${can2 ? 'ready' : ''}`} disabled={!can2} onPointerDown={() => controls.tap('special2')}>
+            <b>{hud?.moves[1] ?? '—'}</b><small>{hud?.families[1]} · {hud?.costs[1]} PP</small>
+          </button>
+        </div>
+        <div className="round-row">
+          <button className={`round tackle ${hud?.tackleNear ? 'near' : ''}`} onPointerDown={() => controls.tap('tackle')}>TACLE</button>
+          <button className="round pass" onPointerDown={() => controls.tap('pass')}>PASSE</button>
+          <button
+            className="round shoot"
+            onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); controls.shootHeld = true }}
+            onPointerUp={() => { controls.shootHeld = false }}
+            onPointerCancel={() => { controls.shootHeld = false }}
+            style={{ ['--charge' as string]: `${(hud?.charge ?? 0) * 100}%` }}
+          >TIR</button>
+        </div>
       </div>
     </div>
   )
 }
-
