@@ -1,13 +1,19 @@
 // Moteur de match déterministe : aucune dépendance à React/DOM/Date/Math.random.
-// Pas de temps fixe (60 Hz). Terrain vertical 100 x 150 unités ; l'équipe 0 (nous) attaque vers y = 0.
+// Pas de temps fixe (60 Hz). Terrain vertical 70 x 120 unités, 3v3 ; l'équipe 0 (nous) attaque vers y = 0.
 import { Rng } from './rng'
 import { duelEffect, type PType } from './types'
 import { movesFor, SPECIES_BY_ID, type Move, type Role, type Species } from './data'
 
-export const W = 100
-export const H = 150
-export const GOAL_L = 36
-export const GOAL_R = 64
+export const W = 70
+export const H = 120
+export const CX = W / 2
+export const GOAL_L = 23
+export const GOAL_R = 47
+export const PLAYERS = 3 // GK, DEF, FWD par équipe
+export const AIM_SPREAD = 8 // écart max du coin visé par rapport au centre du but
+export const HISS_RANGE = 58 // distance max au but pour un hissatsu de tir
+
+export const aimXFor = (mx: number) => CX + Math.max(-1, Math.min(1, mx)) * AIM_SPREAD
 export const DT = 1 / 60
 export const MATCH_SECONDS = 90
 export const OVERTIME_SECONDS = 30
@@ -129,6 +135,7 @@ export interface GameState {
   overtime: boolean
   phase: Phase
   phaseT: number
+  graceUntil: number // l'IA adverse ne tacle ni ne tire avant ce tick
   fighters: Fighter[]
   ball: Ball
   teams: [TeamState, TeamState]
@@ -153,14 +160,14 @@ export interface FighterSetup {
 
 export interface MatchOptions {
   seed: number
-  ours: FighterSetup[] // 5 joueurs, ordre GK, DEF, MID, MID, FWD
+  ours: FighterSetup[] // 3 joueurs, ordre GK, DEF, FWD
   theirs: FighterSetup[]
   difficulty: 1 | 2 | 3
 }
 
-// positions de base équipe 0 (nous, en bas) : GK, DEF, MID, MID, FWD
-const BASE: [number, number][] = [[50, 141], [50, 114], [27, 88], [73, 88], [50, 62]]
-const ROLE_SHIFT: Record<Role, number> = { GK: 0, DEF: 12, MID: 22, FWD: 30 }
+// positions de base équipe 0 (nous, en bas) : GK, DEF, FWD
+const BASE: [number, number][] = [[35, 113], [22, 84], [48, 56]]
+const ROLE_SHIFT: Record<Role, number> = { GK: 0, DEF: 9, FWD: 22 }
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
 const len = (x: number, y: number) => Math.hypot(x, y)
@@ -174,7 +181,7 @@ function mkFighter(id: number, team: TeamId, setup: FighterSetup, idx: number): 
     id, team, role: setup.role, sp, moves: movesFor(sp, setup.role), captain: setup.captain,
     x: hx, y, vx: 0, vy: 0, fx: 0, fy: team === 0 ? -1 : 1,
     stun: 0, tackleCd: 0, invuln: 0, boost: 0, lunge: 0, lungeSpecial: false, lungeX: 0, lungeY: 0,
-    charge: 0, shotBoost: false, aiShootT: 0, aiShootCharge: 0, aiAimX: 50, holdT: 0,
+    charge: 0, shotBoost: false, aiShootT: 0, aiShootCharge: 0, aiAimX: CX, holdT: 0,
     status: { slow: 0, para: 0, freeze: 0, burn: 0 },
   }
 }
@@ -182,14 +189,14 @@ function mkFighter(id: number, team: TeamId, setup: FighterSetup, idx: number): 
 export function createMatch(opts: MatchOptions): GameState {
   const fighters: Fighter[] = []
   opts.ours.forEach((s, i) => fighters.push(mkFighter(i, 0, s, i)))
-  opts.theirs.forEach((s, i) => fighters.push(mkFighter(5 + i, 1, s, i)))
+  opts.theirs.forEach((s, i) => fighters.push(mkFighter(PLAYERS + i, 1, s, i)))
   const mkTeam = (): TeamState => ({ score: 0, pp: 50, hissatsu: 0, tackles: 0, perfects: 0 })
   const s: GameState = {
-    tick: 0, elapsed: 0, time: MATCH_SECONDS, overtime: false, phase: 'kickoff', phaseT: 120,
+    tick: 0, elapsed: 0, time: MATCH_SECONDS, overtime: false, phase: 'kickoff', phaseT: 120, graceUntil: 0,
     fighters,
-    ball: { x: 50, y: H / 2, vx: 0, vy: 0, owner: null, lastTeam: 0, noPickupId: -1, noPickupT: 0, passTarget: null, shotBy: null, shotSpeed: 0, gkErr: 0 },
+    ball: { x: CX, y: H / 2, vx: 0, vy: 0, owner: null, lastTeam: 0, noPickupId: -1, noPickupT: 0, passTarget: null, shotBy: null, shotSpeed: 0, gkErr: 0 },
     teams: [mkTeam(), mkTeam()],
-    controlled: 4, duel: null, lastDuel: null, log: [], difficulty: opts.difficulty, rng: new Rng(opts.seed),
+    controlled: PLAYERS - 1, duel: null, lastDuel: null, log: [], difficulty: opts.difficulty, rng: new Rng(opts.seed),
     lastPassPress: -999, pickupTick: -999, pickupId: -1, winner: null,
     banner: { text: 'COUP D’ENVOI', t: 100 },
   }
@@ -199,7 +206,7 @@ export function createMatch(opts: MatchOptions): GameState {
 
 function resetKickoff(s: GameState, kickTeam: TeamId) {
   s.fighters.forEach((f, i) => {
-    const idx = i % 5
+    const idx = i % PLAYERS
     const [hx, hy] = BASE[idx]
     f.x = hx
     f.y = f.team === 0 ? hy : H - hy
@@ -213,11 +220,11 @@ function resetKickoff(s: GameState, kickTeam: TeamId) {
     f.holdT = 0
     f.status = { slow: 0, para: 0, freeze: 0, burn: 0 }
   })
-  const kicker = s.fighters[kickTeam === 0 ? 4 : 9]
-  kicker.x = 50
-  kicker.y = kickTeam === 0 ? H / 2 + 6 : H / 2 - 6
+  const kicker = s.fighters[kickTeam === 0 ? PLAYERS - 1 : 2 * PLAYERS - 1]
+  kicker.x = CX
+  kicker.y = kickTeam === 0 ? H / 2 + 5 : H / 2 - 5
   s.ball = { ...s.ball, x: kicker.x, y: H / 2, vx: 0, vy: 0, owner: kicker.id, lastTeam: kickTeam, passTarget: null, shotBy: null, noPickupT: 0 }
-  s.controlled = 4
+  s.controlled = PLAYERS - 1
   s.duel = null
   s.phase = 'kickoff'
   s.phaseT = 75
@@ -226,17 +233,17 @@ function resetKickoff(s: GameState, kickTeam: TeamId) {
 // ---------- utilitaires ----------
 const goalY = (t: TeamId) => (t === 0 ? 0 : H) // but que `t` attaque
 const ownGoalY = (t: TeamId) => (t === 0 ? H : 0)
-export const gkOf = (s: GameState, t: TeamId) => s.fighters[t === 0 ? 0 : 5]
+export const gkOf = (s: GameState, t: TeamId) => s.fighters[t === 0 ? 0 : PLAYERS]
 
 function speedOf(s: GameState, f: Fighter): number {
-  let v = 16 + 1.8 * f.sp.spd
+  let v = 8 + 1.3 * f.sp.spd
   if (f.role === 'GK') v *= 1.2
   if (f.boost > 0) v *= 1.5
   if (s.ball.owner === f.id) v *= 0.93
   if (f.status.slow > 0) v *= 0.55
   if (f.status.para > 0) v *= 0.3
   if (f.status.freeze > 0) v = 0
-  if (f.team === 1) v *= [0, 0.9, 0.98, 1.05][s.difficulty]
+  if (f.team === 1) v *= [0, 0.85, 0.92, 1][s.difficulty]
   return v
 }
 
@@ -259,7 +266,7 @@ export function step(s: GameState, input: Input): void {
   if (s.banner && --s.banner.t <= 0) s.banner = null
 
   if (s.phase === 'kickoff') {
-    if (--s.phaseT <= 0) s.phase = 'play'
+    if (--s.phaseT <= 0) { s.phase = 'play'; s.graceUntil = s.tick + 150 }
     // la balle suit son propriétaire, mais personne ne bouge
     syncCarriedBall(s)
     return
@@ -323,8 +330,8 @@ export function step(s: GameState, input: Input): void {
     } else {
       aiThink(s, f, chasers)
     }
-    f.x = clamp(f.x + f.vx * DT, 3, W - 3)
-    f.y = clamp(f.y + f.vy * DT, 3, H - 3)
+    f.x = clamp(f.x + f.vx * DT, 2.5, W - 2.5)
+    f.y = clamp(f.y + f.vy * DT, 2.5, H - 2.5)
     if (Math.abs(f.vx) + Math.abs(f.vy) > 4 && f.lunge === 0) {
       const l = len(f.vx, f.vy)
       f.fx = f.vx / l
@@ -357,8 +364,8 @@ function syncCarriedBall(s: GameState) {
   const b = s.ball
   if (b.owner === null) return
   const o = s.fighters[b.owner]
-  b.x = o.x + o.fx * 3.6
-  b.y = o.y + o.fy * 3.6
+  b.x = o.x + o.fx * 3.2
+  b.y = o.y + o.fy * 3.2
   b.vx = b.vy = 0
 }
 
@@ -376,7 +383,7 @@ function selectControlled(s: GameState) {
   }
   let best = -1
   let bd = 1e9
-  for (let i = 1; i < 5; i++) {
+  for (let i = 1; i < PLAYERS; i++) {
     const f = s.fighters[i]
     const d = len(f.x - b.x, f.y - b.y)
     if (d < bd) { bd = d; best = i }
@@ -411,7 +418,7 @@ function humanActions(s: GameState, input: Input) {
     if (input.shootDown) {
       f.charge = Math.min(1, f.charge + DT / 0.85)
     } else if (f.charge > 0) {
-      shoot(s, f, Math.max(f.charge, 0.22), 50 + clamp(input.mx, -1, 1) * 12)
+      shoot(s, f, Math.max(f.charge, 0.22), aimXFor(input.mx))
       f.charge = 0
     }
     if (input.special1) tryHissatsuShot(s, f)
@@ -436,7 +443,7 @@ function humanActions(s: GameState, input: Input) {
       f.tackleCd = 40
       f.invuln = 14
       const sx = input.mx !== 0 ? Math.sign(input.mx) : 1
-      f.vx = sx * 55
+      f.vx = sx * 40
     }
   }
 }
@@ -459,9 +466,9 @@ function doPass(s: GameState, f: Fighter, mx: number, my: number) {
     const dx = m.x - f.x
     const dy = m.y - f.y
     const d = len(dx, dy)
-    if (d < 8) continue
+    if (d < 6.5) continue
     const dot = (dx * aim[0] + dy * aim[1]) / d
-    const score = dot * 1.0 - d * 0.004 - (m.role === 'GK' ? 0.4 : 0)
+    const score = dot * 1.0 - d * 0.005 - (m.role === 'GK' ? 0.4 : 0)
     if (score > bs) { bs = score; best = m }
   }
   if (best) passTo(s, f, best)
@@ -475,12 +482,12 @@ function passTo(s: GameState, f: Fighter, target: Fighter) {
   const dx = tx - f.x
   const dy = ty - f.y
   const d = len(dx, dy) || 1
-  const speed = 78
+  const speed = 52
   b.owner = null
   b.vx = (dx / d) * speed
   b.vy = (dy / d) * speed
-  b.x = f.x + (dx / d) * 4
-  b.y = f.y + (dy / d) * 4
+  b.x = f.x + (dx / d) * 3.5
+  b.y = f.y + (dy / d) * 3.5
   b.passTarget = target.id
   b.noPickupId = f.id
   b.noPickupT = 22
@@ -496,17 +503,17 @@ function shoot(s: GameState, f: Fighter, charge: number, aimX: number) {
   const dist = len(dx, dy) || 1
   let c = charge
   if (f.shotBoost) c = Math.max(c, 0.7)
-  const err = s.rng.range(-1, 1) * (0.012 + 0.09 * (dist / 110) * (1.15 - c))
+  const err = s.rng.range(-1, 1) * (0.012 + 0.09 * (dist / 90) * (1.15 - c))
   const ang = Math.atan2(dy, dx) + err
   dx = Math.cos(ang)
   dy = Math.sin(ang)
-  const speed = (52 + 78 * c) * (0.85 + 0.03 * f.sp.pow) * (f.shotBoost ? 1.12 : 1)
+  const speed = (34 + 52 * c) * (0.85 + 0.03 * f.sp.pow) * (f.shotBoost ? 1.12 : 1)
   f.shotBoost = false
   b.owner = null
   b.vx = dx * speed
   b.vy = dy * speed
-  b.x = f.x + dx * 4
-  b.y = f.y + dy * 4
+  b.x = f.x + dx * 3.5
+  b.y = f.y + dy * 3.5
   b.shotBy = f.team
   b.shotSpeed = speed
   b.passTarget = null
@@ -514,18 +521,18 @@ function shoot(s: GameState, f: Fighter, charge: number, aimX: number) {
   b.noPickupId = f.id
   b.noPickupT = 20
   const gk = gkOf(s, f.team === 0 ? 1 : 0)
-  b.gkErr = s.rng.range(-1, 1) * (s.difficulty === 3 ? 3 : s.difficulty === 2 ? 5 : 7) * (gk.team === 1 ? 1 : 1.2)
+  b.gkErr = s.rng.range(-1, 1) * (s.difficulty === 3 ? 2.4 : s.difficulty === 2 ? 4 : 5.6) * (gk.team === 1 ? 1 : 1.2)
 }
 
 // ---------- hissatsu ----------
 function distToGoal(f: Fighter) {
-  return len(50 - f.x, goalY(f.team) - f.y)
+  return len(CX - f.x, goalY(f.team) - f.y)
 }
 
 function tryHissatsuShot(s: GameState, f: Fighter) {
   const mv = f.moves[0]
   const t = s.teams[f.team]
-  if (t.pp < mv.cost || distToGoal(f) > 72) return false
+  if (t.pp < mv.cost || distToGoal(f) > HISS_RANGE) return false
   t.pp -= mv.cost
   t.hissatsu++
   pushEvent(s, { kind: 'hissatsu', team: f.team, fighter: f.id, label: mv.name })
@@ -621,14 +628,14 @@ function resolveDuel(s: GameState, marker: number) {
     // balle posée au fond des filets
     b.owner = null
     b.vx = b.vy = 0
-    b.x = 50
+    b.x = CX
     b.y = shooter.team === 0 ? 1 : H - 1
   } else {
     pushEvent(s, { kind: 'save', team: keeper.team, fighter: keeper.id, label: shieldMove })
     applyStatus(keeper, d.move.type)
     shooter.stun = 40
     b.owner = keeper.id
-    keeper.x = clamp(keeper.x, GOAL_L + 4, GOAL_R - 4)
+    keeper.x = clamp(keeper.x, GOAL_L + 3, GOAL_R - 3)
     syncCarriedBall(s)
   }
 }
@@ -656,11 +663,11 @@ function startTackle(s: GameState, f: Fighter, mx: number, my: number, special: 
   if (b.owner !== null && s.fighters[b.owner].team !== f.team) {
     const o = s.fighters[b.owner]
     const d = len(o.x - f.x, o.y - f.y)
-    if (d < 26) { dx = o.x - f.x; dy = o.y - f.y }
+    if (d < 21) { dx = o.x - f.x; dy = o.y - f.y }
   }
   if (len(dx, dy) < 0.2) { dx = f.fx; dy = f.fy }
   const d = len(dx, dy) || 1
-  const sp = special ? 95 : 64
+  const sp = special ? 64 : 44
   f.lungeX = (dx / d) * sp
   f.lungeY = (dy / d) * sp
   f.lunge = special ? 14 : 10
@@ -673,7 +680,7 @@ function checkLungeHit(s: GameState, f: Fighter) {
   if (b.owner === null) return
   const o = s.fighters[b.owner]
   if (o.team === f.team || o.role === 'GK') return
-  const reach = f.lungeSpecial ? 9 : 6
+  const reach = f.lungeSpecial ? 7 : 5
   if (len(o.x - f.x, o.y - f.y) > reach || o.invuln > 0) return
   const p = f.lungeSpecial ? 1 : clamp(0.6 + 0.04 * (f.sp.def - o.sp.spd), 0.35, 0.9)
   f.lunge = 0
@@ -710,15 +717,15 @@ function updateBall(s: GameState) {
   if (b.shotBy !== null) {
     const keeper = gkOf(s, b.shotBy === 0 ? 1 : 0)
     const toward = keeper.team === 1 ? b.vy < 0 : b.vy > 0
-    if (toward && Math.abs(b.y - keeper.y) < Math.max(3.2, Math.abs(b.vy) * DT + 1.5)) {
+    if (toward && Math.abs(b.y - keeper.y) < Math.max(2.6, Math.abs(b.vy) * DT + 1.2)) {
       const frozen = keeper.status.freeze > 0 || keeper.status.para > 0
-      const reach = (6.5 + 0.5 * keeper.sp.def) * (frozen ? 0.4 : 1) * (keeper.status.slow > 0 ? 0.8 : 1)
+      const reach = (5.2 + 0.4 * keeper.sp.def) * (frozen ? 0.4 : 1) * (keeper.status.slow > 0 ? 0.8 : 1)
       if (Math.abs(b.x - keeper.x) < reach) {
-        const parry = clamp((b.shotSpeed - 70) / 70, 0, 0.8)
+        const parry = clamp((b.shotSpeed - 50) / 50, 0, 0.8)
         pushEvent(s, { kind: 'save', team: keeper.team, fighter: keeper.id })
         if (s.rng.next() < parry) {
           b.vy *= -0.35
-          b.vx = s.rng.range(-26, 26)
+          b.vx = s.rng.range(-20, 20)
           b.shotBy = null
           b.noPickupId = keeper.id
           b.noPickupT = 14
@@ -748,7 +755,7 @@ function updateBall(s: GameState) {
   if (bounced) b.shotBy = null
 
   const sp = len(b.vx, b.vy)
-  if (sp < 55 && b.shotBy !== null) b.shotBy = null
+  if (sp < 38 && b.shotBy !== null) b.shotBy = null
   b.vx *= 0.987
   b.vy *= 0.987
   if (sp < 1.5) { b.vx = b.vy = 0; b.passTarget = null }
@@ -761,9 +768,9 @@ function updateBall(s: GameState) {
     if (b.noPickupT > 0 && b.noPickupId === f.id) continue
     if (b.shotBy !== null) continue // seuls les gardiens arrêtent un tir
     const d = len(f.x - b.x, f.y - b.y)
-    const radius = f.role === 'GK' ? 6.5 : 5.2
+    const radius = f.role === 'GK' ? 5.2 : 4.2
     if (d > radius) continue
-    if (sp > 85 && b.passTarget !== f.id) continue
+    if (sp > 62 && b.passTarget !== f.id) continue
     if (d < bd) { bd = d; best = f }
   }
   if (best) {
@@ -780,7 +787,7 @@ function updateBall(s: GameState) {
 
 function scoreGoal(s: GameState, team: TeamId) {
   const b = s.ball
-  registerGoal(s, team, team === 0 ? 4 : 9)
+  registerGoal(s, team, team === 0 ? PLAYERS - 1 : 2 * PLAYERS - 1)
   b.vx = b.vy = 0
   s.phase = 'goal'
   s.phaseT = 100
@@ -789,13 +796,13 @@ function scoreGoal(s: GameState, team: TeamId) {
 
 // ---------- IA ----------
 function formationPos(s: GameState, f: Fighter): [number, number] {
-  const idx = f.id % 5
+  const idx = f.id % PLAYERS
   const [bx, by] = BASE[idx]
   const prog = f.team === 0 ? 1 - s.ball.y / H : s.ball.y / H
   const shift = (prog - 0.5) * ROLE_SHIFT[f.role]
   const y0 = by - shift
-  const lateral = (s.ball.x - 50) * 0.25
-  const x = clamp(bx + lateral, 10, 90)
+  const lateral = (s.ball.x - CX) * 0.25
+  const x = clamp(bx + lateral, 8, W - 8)
   return [x, f.team === 0 ? y0 : H - y0]
 }
 
@@ -815,7 +822,7 @@ function steer(s: GameState, f: Fighter, tx: number, ty: number, mul = 1) {
   const dy = ty - f.y
   const d = len(dx, dy)
   const sp = speedOf(s, f) * mul
-  const k = d < 6 ? d / 6 : 1
+  const k = d < 5 ? d / 5 : 1
   const wx = d > 0.3 ? (dx / d) * sp * k : 0
   const wy = d > 0.3 ? (dy / d) * sp * k : 0
   f.vx += (wx - f.vx) * 0.25
@@ -837,7 +844,7 @@ function aiThink(s: GameState, f: Fighter, chasers: Set<number>) {
       steer(s, f, owner.x + owner.vx * 0.2, owner.y + owner.vy * 0.2, 0.97)
       const d = len(owner.x - f.x, owner.y - f.y)
       const wait = f.team === 0 ? 0.04 : 0.12 + 0.04 * diff
-      if (d < 9 && f.tackleCd === 0 && s.rng.next() < wait) {
+      if (d < 7.5 && f.tackleCd === 0 && (f.team === 0 || s.tick >= s.graceUntil) && s.rng.next() < wait) {
         // les IA adverses utilisent parfois un tacle hissatsu
         const mv = f.moves[1]
         const t = s.teams[f.team]
@@ -869,13 +876,13 @@ function aiThink(s: GameState, f: Fighter, chasers: Set<number>) {
   // --- mon équipe attaque : appel de balle ---
   const [hx, hy] = formationPos(s, f)
   const forward = f.team === 0 ? -1 : 1
-  steer(s, f, hx + (f.id % 2 === 0 ? 6 : -6), hy + forward * 12, 0.85)
+  steer(s, f, hx + (f.id % 2 === 0 ? 5 : -5), hy + forward * 10, 0.85)
 }
 
 function aiKeeper(s: GameState, f: Fighter) {
   const b = s.ball
   const gy = ownGoalY(f.team)
-  const base = f.team === 0 ? gy - 8 : gy + 8
+  const base = f.team === 0 ? gy - 6.5 : gy + 6.5
   if (b.owner === f.id) {
     f.holdT++
     if (f.holdT > 40) {
@@ -883,7 +890,7 @@ function aiKeeper(s: GameState, f: Fighter) {
       const tgt = mates.sort((a, c) => len(a.x - f.x, a.y - f.y) - len(c.x - f.x, c.y - f.y))[1] ?? mates[0]
       passTo(s, f, tgt)
     }
-    steer(s, f, 50, base)
+    steer(s, f, CX, base)
     return
   }
   let tx = clamp(b.x, GOAL_L + 2, GOAL_R - 2)
@@ -893,12 +900,12 @@ function aiKeeper(s: GameState, f: Fighter) {
     const t = (f.y - b.y) / b.vy
     const px = b.x + b.vx * t + b.gkErr
     tx = clamp(px, GOAL_L + 1, GOAL_R - 1)
-  } else if (b.owner === null && len(b.x - f.x, b.y - f.y) < 22 && b.shotBy === null) {
+  } else if (b.owner === null && len(b.x - f.x, b.y - f.y) < 18 && b.shotBy === null) {
     tx = b.x
     ty = b.y
   } else {
-    const near = clamp(1 - Math.abs(b.y - gy) / 70, 0, 1)
-    ty = base + (f.team === 0 ? -1 : 1) * 8 * near
+    const near = clamp(1 - Math.abs(b.y - gy) / 56, 0, 1)
+    ty = base + (f.team === 0 ? -1 : 1) * 6.5 * near
   }
   steer(s, f, tx, ty, incoming ? 1.35 : 1)
 }
@@ -932,40 +939,41 @@ function aiCarrier(s: GameState, f: Fighter) {
     if (d < nd) { nd = d; nearest = o }
   }
 
+  const calm = f.team === 1 && s.tick < s.graceUntil
   // hissatsu de tir (IA adverse uniquement, l'équipe 0 est pilotée par l'humain)
-  if (f.team === 1 && dg < 62 && t.pp >= f.moves[0].cost + 8 && s.rng.next() < 0.0025 * (1 + s.difficulty)) {
+  if (f.team === 1 && !calm && dg < 50 && t.pp >= f.moves[0].cost + 8 && s.rng.next() < 0.0025 * (1 + s.difficulty)) {
     tryHissatsuShot(s, f)
     return
   }
-  if (f.team === 1 && f.moves[1].family === 'DRIBBLE' && nd < 14 && t.pp >= f.moves[1].cost + 30 && s.rng.next() < 0.03) {
+  if (f.team === 1 && f.moves[1].family === 'DRIBBLE' && nd < 11 && t.pp >= f.moves[1].cost + 30 && s.rng.next() < 0.03) {
     tryDribble(s, f)
   }
 
   // tir normal
-  if (dg < 50 && s.rng.next() < 0.05 + 0.012 * s.difficulty) {
+  if (!calm && dg < 40 && s.rng.next() < 0.05 + 0.012 * s.difficulty) {
     f.aiShootT = 14 + s.rng.int(24)
     f.aiShootCharge = 0.45 + s.rng.next() * 0.5
-    f.aiAimX = enemyGk.x < 50 ? 62 : 38
-    f.aiAimX += s.rng.range(-3, 3)
+    f.aiAimX = enemyGk.x < CX ? CX + AIM_SPREAD - 1 : CX - AIM_SPREAD + 1
+    f.aiAimX += s.rng.range(-2.4, 2.4)
     f.charge = 0.05
     return
   }
 
   // passe si pressé
-  if (nearest && nd < 11 && s.rng.next() < 0.08) {
+  if (nearest && nd < 9 && s.rng.next() < 0.08) {
     const mates = s.fighters.filter((m) => m.team === f.team && m.id !== f.id && m.role !== 'GK')
-    const ahead = mates.filter((m) => (m.y - f.y) * fwd > -6).sort((a, c) => Math.abs(a.x - f.x) - Math.abs(c.x - f.x))
+    const ahead = mates.filter((m) => (m.y - f.y) * fwd > -5).sort((a, c) => Math.abs(a.x - f.x) - Math.abs(c.x - f.x))
     const tgt = ahead[0] ?? mates[0]
     if (tgt) { passTo(s, f, tgt); return }
   }
 
   // conduite vers le but, en contournant le défenseur le plus proche
-  let tx = 50 + clamp(f.x - 50, -12, 12) * 0.5
+  let tx = CX + clamp(f.x - CX, -9, 9) * 0.5
   let ty = gy
-  if (nearest && nd < 20) {
+  if (nearest && nd < 16) {
     const side = f.x < nearest.x ? -1 : 1
-    tx = clamp(f.x + side * 18, 12, 88)
-    ty = f.y + fwd * 26
+    tx = clamp(f.x + side * 14, 9, W - 9)
+    ty = f.y + fwd * 21
   }
   steer(s, f, tx, ty, 0.95)
 }
